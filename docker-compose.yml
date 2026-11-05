@@ -1,0 +1,11 @@
+# 用法：
+#   docker compose run --rm sub-butler check          # 检查配置
+#   docker compose run --rm sub-butler sync --dry-run # 试运行
+#   docker compose run --rm sub-butler run            # 每日任务（放进宿主机 cron）
+services:
+  sub-butler:
+    build: .
+    env_file: .env
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - ./data:/app/data

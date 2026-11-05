@@ -1,0 +1,60 @@
+# sub-butler 配置示例：复制为 config.yaml 后修改。
+# 密钥建议写在环境变量或 .env 里，这里用 ${变量名} 引用。
+
+timezone: Asia/Shanghai
+state_dir: ./data          # 本地状态（已处理邮件、汇率缓存）存放位置
+
+mail:
+  imap_host: imap.gmail.com
+  imap_port: 993
+  username: you@gmail.com
+  password: ${IMAP_PASSWORD}     # Gmail 请用「应用专用密码」，不是登录密码
+  # Gmail 建议扫描「所有邮件」，这样归档过的账单也能读到。
+  # 英文界面是 "[Gmail]/All Mail"，中文界面是 "[Gmail]/所有邮件"；其他邮箱用 INBOX
+  folder: "[Gmail]/All Mail"
+  lookback_days: 7               # 第一次运行往回扫多少天；之后从上次同步日开始
+  max_messages: 200              # 单次最多检查多少封
+  include_senders: []            # 总是交给大模型判断的发件人（子串匹配），如 ["myhost.com"]
+  exclude_senders: []            # 永远跳过的发件人，如 ["binance.com"]
+
+llm:                             # 任意 OpenAI 兼容接口
+  base_url: https://api.deepseek.com
+  api_key: ${LLM_API_KEY}
+  model: deepseek-chat
+
+notion:
+  token: ${NOTION_TOKEN}         # Notion 内部集成的 Secret
+  database_id: ""                # 数据库链接里那串 32 位 ID；或者直接填 data_source_id
+  data_source_id: ""
+  # 字段名映射（逻辑字段: Notion 里的列名）。只写和默认值不同的即可。
+  # fields:
+  #   name: Name
+  #   due: Renewal Date
+  # 取值映射（逻辑值: Notion 里的选项名）。
+  # values:
+  #   status: {active: Active, trial: Trial, cancelled: Cancelled, expired: Expired}
+  #   cycle: {monthly: Monthly, yearly: Yearly}
+
+remind:
+  window_days: 3                 # 提前几天提醒
+  include_overdue: true          # 手动续费且已过期的条目也提醒
+
+report:
+  base_currency: CNY             # 月报统一折算成这个币种
+  monthly_day: 1                 # 每月几号发月报
+  fallback_rates: {USD: 1.0, CNY: 7.1, HKD: 7.8, TWD: 32.0, EUR: 0.92}
+
+notify:                          # 不需要的渠道删掉即可；控制台输出始终开启
+  telegram:
+    bot_token: ${TG_BOT_TOKEN}
+    chat_id: "123456789"
+  # bark:                        # iOS 推送
+  #   url: https://api.day.app/你的Key
+  # serverchan:                  # 微信推送
+  #   sendkey: ${SERVERCHAN_KEY}
+  # email:
+  #   smtp_host: smtp.gmail.com
+  #   smtp_port: 465
+  #   username: you@gmail.com
+  #   password: ${SMTP_PASSWORD}
+  #   to: you@gmail.com
