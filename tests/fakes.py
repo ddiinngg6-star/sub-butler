@@ -38,29 +38,64 @@ OPTIONS = {
 
 
 class FakeNotion:
-    def __init__(self) -> None:
+    """和真实 Notion 一样严格：写入不存在的单选选项会报错。"""
+
+    def __init__(self, allow_schema_update: bool = True) -> None:
         self.pages: dict[str, dict[str, Any]] = {}
         self.calls: list[tuple[str, Any]] = []
+        self.allow_schema_update = allow_schema_update
+        self.options = {
+            name: [{"id": f"{name}-{i}", "name": o, "color": "blue"} for i, o in enumerate(opts)]
+            for name, opts in OPTIONS.items()
+        }
 
     def get_data_source(self, data_source_id: str) -> dict[str, Any]:
         props = {}
         for name, t in SCHEMA_TYPES.items():
             p: dict[str, Any] = {"type": t}
             if t == "select":
-                p["select"] = {"options": [{"name": o} for o in OPTIONS.get(name, [])]}
+                p["select"] = {"options": [dict(o) for o in self.options.get(name, [])]}
             props[name] = p
         return {"properties": props}
+
+    def update_data_source(self, data_source_id: str, properties: dict[str, Any]) -> dict[str, Any]:
+        from sub_butler.notion import NotionError
+
+        self.calls.append(("schema", properties))
+        if not self.allow_schema_update:
+            raise NotionError("no permission")
+        for name, conf in properties.items():
+            new = []
+            by_id = {o["id"]: o for o in self.options.get(name, [])}
+            for o in conf["select"]["options"]:
+                if "id" in o:
+                    assert o["id"] in by_id, "引用了不存在的选项 id"
+                    new.append(by_id[o["id"]])
+                else:
+                    new.append({"id": f"{name}-new-{len(new)}", "name": o["name"], "color": "default"})
+            self.options[name] = new
+        return self.get_data_source(data_source_id)
 
     def query_all(self, data_source_id: str) -> list[dict[str, Any]]:
         return [{"id": pid, "properties": props} for pid, props in self.pages.items()]
 
+    def _validate(self, properties: dict[str, Any]) -> None:
+        from sub_butler.notion import NotionError
+
+        for name, val in properties.items():
+            if SCHEMA_TYPES[name] == "select" and val["select"] and name in self.options:
+                if val["select"]["name"] not in {o["name"] for o in self.options[name]}:
+                    raise NotionError(f"Invalid select value for property {name}")
+
     def create_page(self, data_source_id: str, properties: dict[str, Any]) -> dict[str, Any]:
+        self._validate(properties)
         pid = str(uuid.uuid4())
         self.pages[pid] = self._normalize(properties)
         self.calls.append(("create", properties))
         return {"id": pid}
 
     def update_page(self, page_id: str, properties: dict[str, Any]) -> dict[str, Any]:
+        self._validate(properties)
         self.pages[page_id].update(self._normalize(properties))
         self.calls.append(("update", properties))
         return {"id": page_id}

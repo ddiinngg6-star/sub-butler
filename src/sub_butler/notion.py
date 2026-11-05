@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from datetime import date
 from typing import Any, Protocol
@@ -10,6 +11,8 @@ import httpx
 
 from .config import NotionConfig
 from .models import Cycle, Status, Subscription
+
+log = logging.getLogger(__name__)
 
 NOTION_VERSION = "2025-09-03"
 TEXT_LIMIT = 2000  # Notion 单段富文本的长度上限
@@ -21,6 +24,7 @@ class NotionError(Exception):
 
 class NotionAPI(Protocol):
     def get_data_source(self, data_source_id: str) -> dict[str, Any]: ...
+    def update_data_source(self, data_source_id: str, properties: dict[str, Any]) -> dict[str, Any]: ...
     def query_all(self, data_source_id: str) -> list[dict[str, Any]]: ...
     def create_page(self, data_source_id: str, properties: dict[str, Any]) -> dict[str, Any]: ...
     def update_page(self, page_id: str, properties: dict[str, Any]) -> dict[str, Any]: ...
@@ -64,6 +68,9 @@ class NotionClient:
 
     def get_data_source(self, data_source_id: str) -> dict[str, Any]:
         return self._request("GET", f"/data_sources/{data_source_id}")
+
+    def update_data_source(self, data_source_id: str, properties: dict[str, Any]) -> dict[str, Any]:
+        return self._request("PATCH", f"/data_sources/{data_source_id}", json={"properties": properties})
 
     def query_all(self, data_source_id: str) -> list[dict[str, Any]]:
         results: list[dict[str, Any]] = []
@@ -189,6 +196,36 @@ class SubscriptionStore:
             return [o["name"] for o in prop.get(ptype, {}).get("options", [])]
         return []
 
+    def ensure_option(self, prop_name: str, value: str) -> None:
+        """单选 / 多选里没有这个选项时，先把它加进数据库。
+
+        Notion 拒绝写入不存在的选项（"If a new select option is needed, the data source
+        must be updated to add it"），所以新服务商、新币种要先补到选项列表里。
+        已有选项按 id 原样保留。
+        """
+        prop = self.schema.get(prop_name)
+        if not prop or prop.get("type") not in ("select", "multi_select"):
+            return
+        ptype = prop["type"]
+        existing = prop.setdefault(ptype, {}).setdefault("options", [])
+        if any(o.get("name") == value for o in existing):
+            return
+        keep = [
+            {k: o[k] for k in ("id", "name", "color") if o.get(k)} for o in existing
+        ]
+        try:
+            ds = self.api.update_data_source(
+                self.ds_id, {prop_name: {ptype: {"options": keep + [{"name": value}]}}}
+            )
+        except NotionError as e:
+            log.warning("无法为「%s」添加选项「%s」，将直接尝试写入：%s", prop_name, value, e)
+            return
+        new_schema = (ds or {}).get("properties")
+        if new_schema and prop_name in new_schema:
+            self._schema = new_schema
+        else:
+            existing.append({"name": value})
+
     def load(self) -> list[Subscription]:
         return [self._decode(page) for page in self.api.query_all(self.ds_id)]
 
@@ -245,6 +282,10 @@ class SubscriptionStore:
                 continue  # 数据库里没有这个字段，跳过
             if value is None and only is None:
                 continue  # 新建时不写空值
+            if value is not None and prop["type"] in ("select", "multi_select"):
+                for v in value if isinstance(value, list) else [value]:
+                    self.ensure_option(name, str(v))
+                prop = self.schema[name]
             out[name] = encode_property(prop["type"], value)
         return out
 

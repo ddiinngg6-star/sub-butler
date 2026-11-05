@@ -70,3 +70,40 @@ def test_client_uses_data_source_endpoints_and_paginates():
 def test_client_requires_token():
     with pytest.raises(NotionError):
         NotionClient("")
+
+
+def test_new_select_option_is_added_before_write():
+    from sub_butler.models import Subscription
+
+    fake = FakeNotion()
+    store = SubscriptionStore(fake, "ds", NotionConfig())
+    store.create(Subscription(name="NewHost VPS", provider="NewHost", category="VPS"))
+
+    schema_calls = [c for c in fake.calls if c[0] == "schema"]
+    assert len(schema_calls) == 1, "只有服务商缺选项，只改一次表结构"
+    sent = schema_calls[0][1]["服务商"]["select"]["options"]
+    assert sent[:2] == [
+        {"id": "服务商-0", "name": "ExampleAI", "color": "blue"},
+        {"id": "服务商-1", "name": "CloudCo", "color": "blue"},
+    ], "已有选项按 id 原样保留"
+    assert sent[-1] == {"name": "NewHost"}
+    assert "NewHost" in store.options("provider")
+    # 第二次写同一个服务商不再改表结构
+    store.create(Subscription(name="NewHost VPS 2", provider="NewHost"))
+    assert len([c for c in fake.calls if c[0] == "schema"]) == 1
+
+
+def test_schema_update_failure_surfaces_as_sync_error():
+    from fakes import FakeExtractor, FakeMail, mail
+    from sub_butler.models import BillingEvent, EventType
+    from sub_butler.state import State
+    from sub_butler.sync import run_sync
+
+    fake = FakeNotion(allow_schema_update=False)
+    ev = BillingEvent(EventType.PURCHASE, provider="NewHost", product="VPS", amount=5, currency="USD", cycle=Cycle.MONTHLY)
+    state = State(":memory:")
+    report = run_sync(mail=FakeMail([mail("m1")]), extractor=FakeExtractor({"m1": ev}),
+                      store=SubscriptionStore(fake, "ds", NotionConfig()), state=state, today=date(2026, 11, 4))
+    assert fake.pages == {}
+    assert report.errors and "写入 Notion 失败" in report.errors[0]
+    assert not state.seen("m1"), "写入失败的邮件下次重试"
